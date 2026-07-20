@@ -332,3 +332,122 @@ describe('<loso-pos-panel> — accessibility', () => {
     expect((focused as unknown as HTMLElement).getAttribute('data-act')).toBe('quote');
   });
 });
+
+const commitResp = ok({
+  loyaltyReference: 'TXN-1',
+  posTransactionId: 'POS-1',
+  discountApplied: 0,
+  pointsRedeemed: 0,
+  pointsEarned: 42,
+  newPointsBalance: 42,
+  finalAmount: 42,
+});
+const refundResp = (refundedAmount: number, type: 'partial' | 'full') =>
+  ok({
+    refundReference: 'RFD-1',
+    loyaltyReference: 'TXN-1',
+    type,
+    refundedAmount,
+    pointsReversed: refundedAmount,
+    pointsRestored: 0,
+    newPointsBalance: 42,
+  });
+
+/** Drive an earn-only sale to a committed receipt. Returns once the receipt is rendered. */
+async function commitSale(el: LosoPosPanel): Promise<void> {
+  await el.quote();
+  await el.commit();
+}
+
+/**
+ * Click the refund button and wait for the round-trip to settle. The `loso-refunded`
+ * event fires inside the success branch, one turn before the panel re-renders with the
+ * new remaining balance, so flush a macrotask after it to let that render land.
+ */
+function clickAndAwaitRefund(el: LosoPosPanel): Promise<void> {
+  const done = new Promise<void>((r) => el.addEventListener('loso-refunded', () => r(), { once: true }));
+  el.shadowRoot?.querySelector<HTMLButtonElement>('[data-act="refund"]')?.click();
+  return done.then(() => new Promise<void>((r) => setTimeout(r, 0)));
+}
+
+describe('<loso-pos-panel> — partial refunds', () => {
+  it('defaults the slider to the full amount and omits `amount` for a true full refund', async () => {
+    const { fetch, calls } = mockFetch([ok(quoteData), commitResp, refundResp(42, 'full')]);
+    const el = mountPanel(fetch);
+    await commitSale(el);
+
+    // Slider defaults to the whole paid amount, and the button says so.
+    const slider = el.shadowRoot?.querySelector<HTMLInputElement>('[data-el="refund"]');
+    expect(slider?.value).toBe('42');
+    expect(el.shadowRoot?.querySelector('[data-el="refund-label"]')?.textContent).toBe('42.00 BAM');
+
+    await clickAndAwaitRefund(el);
+
+    // A full refund omits amount, so the API reverses stamps/challenges too.
+    const body = JSON.parse(calls[2]?.body ?? '{}');
+    expect(body.amount).toBeUndefined();
+    expect(body.reason).toBe('customer_return');
+  });
+
+  it('passes the amount for a partial, and tracks the spoken value as it drags', async () => {
+    const { fetch, calls } = mockFetch([ok(quoteData), commitResp, refundResp(10, 'partial')]);
+    const el = mountPanel(fetch);
+    await commitSale(el);
+
+    const slider = el.shadowRoot?.querySelector<HTMLInputElement>('[data-el="refund"]');
+    slider!.value = '10';
+    slider!.dispatchEvent(new Event('input'));
+    expect(slider?.getAttribute('aria-valuetext')).toBe('10.00 BAM');
+    expect(el.shadowRoot?.querySelector('[data-el="refund-label"]')?.textContent).toBe('10.00 BAM');
+
+    await clickAndAwaitRefund(el);
+
+    const body = JSON.parse(calls[2]?.body ?? '{}');
+    expect(body.amount).toBe(10);
+  });
+
+  it('clamps the slider to the amount still refundable', async () => {
+    const { fetch } = mockFetch([ok(quoteData), commitResp]);
+    const el = mountPanel(fetch);
+    await commitSale(el);
+
+    const slider = el.shadowRoot?.querySelector<HTMLInputElement>('[data-el="refund"]');
+    slider!.value = '999';
+    slider!.dispatchEvent(new Event('input'));
+    expect(slider?.getAttribute('aria-valuetext')).toBe('42.00 BAM'); // the paid total, not 999
+  });
+
+  it('caps successive partials and drops the refund control once nothing is left', async () => {
+    const { fetch, calls } = mockFetch([
+      ok(quoteData),
+      commitResp,
+      refundResp(10, 'partial'), // first: 10 of 42
+      refundResp(32, 'partial'), // second: the remaining 32
+    ]);
+    const el = mountPanel(fetch);
+    await commitSale(el);
+
+    // Refund 10 of 42.
+    const slider = el.shadowRoot?.querySelector<HTMLInputElement>('[data-el="refund"]');
+    slider!.value = '10';
+    slider!.dispatchEvent(new Event('input'));
+    await clickAndAwaitRefund(el);
+
+    // The remaining is now 32, and the slider is re-capped there.
+    const slider2 = el.shadowRoot?.querySelector<HTMLInputElement>('[data-el="refund"]');
+    expect(slider2?.getAttribute('max')).toBe('32');
+    slider2!.value = '999';
+    slider2!.dispatchEvent(new Event('input'));
+    expect(slider2?.getAttribute('aria-valuetext')).toBe('32.00 BAM');
+
+    // Refund the remaining 32. Second refund is a top-up, so it passes an amount even
+    // though it clears the sale — only a first, whole-amount refund omits it.
+    await clickAndAwaitRefund(el);
+    const secondBody = JSON.parse(calls[3]?.body ?? '{}');
+    expect(secondBody.amount).toBe(32);
+
+    // Nothing left to refund: the control is gone, only the next-sale button remains.
+    expect(el.shadowRoot?.querySelector('[data-el="refund"]')).toBeNull();
+    expect(el.shadowRoot?.querySelector('[data-act="new-sale"]')).not.toBeNull();
+  });
+});

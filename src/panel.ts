@@ -52,6 +52,12 @@ export class LosoPosPanel extends HTMLElement {
   #error: PosError | null = null;
   #busy = false;
 
+  // Refund state. `#refundAmount` is what the cashier will refund next; `#refundedTotal`
+  // is the running sum, so successive partials are capped at what is still refundable —
+  // the contract rejects a cumulative over-refund (`refund.exceeds_amount`).
+  #refundAmount = 0;
+  #refundedTotal = 0;
+
   // Accessibility bookkeeping. The shadow root holds a persistent skeleton — two
   // live regions and one mount point — built once; only the mount's contents are
   // replaced on render, so the live regions survive to announce and focus can be
@@ -193,6 +199,10 @@ export class LosoPosPanel extends HTMLElement {
       });
       if (result.ok) {
         this.#commit = result.data;
+        // Default the refund slider to the whole amount: "customer returns everything"
+        // is the common case, and it can never over-refund.
+        this.#refundAmount = result.data.finalAmount;
+        this.#refundedTotal = 0;
         this.#announce(
           `Sale committed. Reference ${result.data.loyaltyReference}. Paid ${money(result.data.finalAmount)} ${cart.currency}.`
         );
@@ -214,10 +224,16 @@ export class LosoPosPanel extends HTMLElement {
       });
       if (result.ok) {
         this.#refund = result.data;
+        this.#refundedTotal = round2(this.#refundedTotal + result.data.refundedAmount);
+        const remaining = round2((this.#commit?.finalAmount ?? 0) - this.#refundedTotal);
+        this.#refundAmount = remaining;
         this.#announce(
-          `Refund processed. ${money(result.data.refundedAmount)} ${this.cart?.currency ?? ''} refunded.`
+          `Refund processed. ${money(result.data.refundedAmount)} ${this.cart?.currency ?? ''} refunded.` +
+            (remaining > 0 ? ` ${money(remaining)} still refundable.` : '')
         );
-        this.#focusTarget = '[data-act="new-sale"]';
+        // If more is refundable, leave the cashier on the refund control to continue;
+        // otherwise send them to the next sale.
+        this.#focusTarget = remaining > 0 ? '[data-el="refund"]' : '[data-act="new-sale"]';
         this.#emit('loso-refunded', { refund: result.data });
       }
       return result;
@@ -232,6 +248,8 @@ export class LosoPosPanel extends HTMLElement {
     this.#commit = null;
     this.#refund = null;
     this.#error = null;
+    this.#refundAmount = 0;
+    this.#refundedTotal = 0;
     // Back to the top of the flow — put the cashier on the scan field.
     this.#focusTarget = '[data-el="code"]';
     this.#render();
@@ -495,7 +513,10 @@ export class LosoPosPanel extends HTMLElement {
 
   #receiptTemplate(currency: string): string {
     const c = this.#commit as PosCommitResponse;
-    return `
+    const remaining = round2(c.finalAmount - this.#refundedTotal);
+    const amount = round2(Math.min(Math.max(this.#refundAmount, 0), remaining));
+
+    const receipt = `
       <div class="card receipt">
         <div class="spread"><span>Reference</span><strong>${esc(c.loyaltyReference)}</strong></div>
         <div class="spread"><span>Discount applied</span><strong>${money(c.discountApplied)}</strong></div>
@@ -503,10 +524,29 @@ export class LosoPosPanel extends HTMLElement {
         <div class="spread"><span>Points earned</span><strong>${c.pointsEarned}</strong></div>
         <div class="spread"><span>New balance</span><strong>${c.newPointsBalance}</strong></div>
         <div class="spread total"><span>Paid</span><strong>${money(c.finalAmount)} ${esc(currency)}</strong></div>
-      </div>
-      <div class="row">
-        <button type="button" data-act="refund-all">Refund all</button>
-        <button type="button" data-act="new-sale">New sale</button>
+      </div>`;
+
+    // Once nothing is refundable, the only action left is the next sale.
+    if (remaining <= 0) {
+      return `${receipt}
+        <div class="row"><button type="button" data-act="new-sale">New sale</button></div>`;
+    }
+
+    // Slider from 0 to what is still refundable — drag to the top for a full refund,
+    // down for a partial. Same idiom as the discount slider, including the voiced value.
+    return `${receipt}
+      <div class="card">
+        <label class="muted" for="loso-refund">Refund amount</label>
+        <div class="offer__readout" data-el="refund-readout" aria-hidden="true">
+          <strong>${money(amount)} ${esc(currency)}</strong> of ${money(remaining)}
+        </div>
+        <input type="range" id="loso-refund" data-el="refund"
+               min="0" max="${remaining}" step="0.01" value="${amount}"
+               aria-valuetext="${money(amount)} ${esc(currency)}" />
+        <div class="row">
+          <button type="button" class="primary" data-act="refund">Refund <span data-el="refund-label">${money(amount)} ${esc(currency)}</span></button>
+          <button type="button" data-act="new-sale">New sale</button>
+        </div>
       </div>`;
   }
 
@@ -560,8 +600,31 @@ export class LosoPosPanel extends HTMLElement {
     });
     on('quote', () => void this.quote());
     on('commit', () => void this.commit());
-    on('refund-all', () => void this.refund());
     on('new-sale', () => this.reset());
+
+    on('refund', () => {
+      const paid = this.#commit?.finalAmount ?? 0;
+      // A first, full-amount refund omits `amount` so the API treats it as a true full
+      // refund — which also reverses stamp cards, challenges and referral bonuses.
+      // A partial (or a top-up on an already-partly-refunded sale) passes the amount and
+      // reverses loyalty pro rata only.
+      const isFull = this.#refundedTotal === 0 && this.#refundAmount >= paid;
+      void this.refund(isFull ? undefined : this.#refundAmount);
+    });
+
+    const refundSlider = root.querySelector<HTMLInputElement>('[data-el="refund"]');
+    refundSlider?.addEventListener('input', (event) => {
+      const remaining = round2((this.#commit?.finalAmount ?? 0) - this.#refundedTotal);
+      const value = round2(Math.min(Math.max(Number((event.target as HTMLInputElement).value), 0), remaining));
+      this.#refundAmount = value;
+      const currency = this.cart?.currency ?? '';
+      // Update in place — a re-render mid-drag would tear the thumb from the pointer.
+      const readout = root.querySelector('[data-el="refund-readout"]');
+      if (readout) readout.innerHTML = `<strong>${money(value)} ${esc(currency)}</strong> of ${money(remaining)}`;
+      const label = root.querySelector('[data-el="refund-label"]');
+      if (label) label.textContent = `${money(value)} ${currency}`;
+      refundSlider.setAttribute('aria-valuetext', `${money(value)} ${currency}`);
+    });
 
     const slider = root.querySelector<HTMLInputElement>('[data-el="discount"]');
     slider?.addEventListener('input', (event) => {
