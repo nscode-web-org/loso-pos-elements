@@ -1,0 +1,9 @@
+{
+  // Declaration emit for the published package. Mirrors the SDK: same compiler
+  // options as the root config, minus the tests, which must not reach dist/.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "src"
+  },
+  "exclude": ["src/**/*.test.ts"]
+}

@@ -1,0 +1,80 @@
+{
+  "name": "@nscodecom/loso-pos-elements",
+  "version": "0.0.0",
+  "description": "Drop-in web components for the Loso POS loyalty API. Framework-agnostic custom elements built on @nscodecom/loso-pos-sdk.",
+  "keywords": [
+    "loso",
+    "pos",
+    "loyalty",
+    "web-components",
+    "custom-elements",
+    "point-of-sale",
+    "ecr"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nscode-web-org/loso-pos-elements.git"
+  },
+  "homepage": "https://github.com/nscode-web-org/loso-pos-elements#readme",
+  "bugs": "https://github.com/nscode-web-org/loso-pos-elements/issues",
+  "type": "module",
+  "sideEffects": [
+    "./dist/define.js",
+    "./dist/define.cjs"
+  ],
+  "engines": {
+    "node": ">=20.19"
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./define": {
+      "import": {
+        "types": "./dist/define.d.ts",
+        "default": "./dist/define.js"
+      },
+      "require": {
+        "types": "./dist/define.d.cts",
+        "default": "./dist/define.cjs"
+      }
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup && npm run build:types",
+    "build:types": "tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist && node scripts/emit-cjs-types.mjs",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run build"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@nscodecom/loso-pos-sdk": "file:../loso-pos-sdk"
+  },
+  "devDependencies": {
+    "happy-dom": "^20.0.0",
+    "tsup": "^8.5.0",
+    "typescript": "~7.0.2",
+    "vitest": "^4.1.10"
+  }
+}
