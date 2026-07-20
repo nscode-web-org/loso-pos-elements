@@ -69,7 +69,7 @@
     "access": "public"
   },
   "dependencies": {
-    "@nscodecom/loso-pos-sdk": "file:../loso-pos-sdk"
+    "@nscodecom/loso-pos-sdk": "^0.2.0"
   },
   "devDependencies": {
     "happy-dom": "^20.0.0",
