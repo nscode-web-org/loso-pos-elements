@@ -33,6 +33,8 @@ jobs:
       - run: npm test
       - run: npm run build
 
-      # TODO: port the SDK's `test:package-types` check. This package has two
-      # entries (`.` and `./define`) and a .d.ts/.d.cts split, which is exactly
-      # the shape that regression hit in the SDK — and nothing above covers it.
+      # Packs the tarball and typechecks ESM + CJS consumers against it, across
+      # both entries (`.` and `./define`). The steps above all pass while the
+      # published package is unusable, so this is the only one that covers the
+      # exports map and the .d.ts/.d.cts split.
+      - run: npm run test:package-types

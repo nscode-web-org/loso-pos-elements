@@ -63,6 +63,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:package-types": "node scripts/check-package-types.mjs",
     "prepublishOnly": "npm run build"
   },
   "publishConfig": {

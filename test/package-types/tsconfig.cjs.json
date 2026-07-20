@@ -1,0 +1,15 @@
+{
+  // The CJS consumer, compiled on its own — see tsconfig.esm.json for why they
+  // are kept in separate programs. node16 is the strict case that enforces the
+  // require-condition landing on a .d.cts rather than an ESM .d.ts (TS1479).
+  "compilerOptions": {
+    "strict": true,
+    "module": "node16",
+    "moduleResolution": "node16",
+    "target": "es2022",
+    "lib": ["ES2022", "DOM"],
+    "types": [],
+    "noEmit": true
+  },
+  "files": ["cjs.cts"]
+}

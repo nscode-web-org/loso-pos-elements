@@ -1,0 +1,17 @@
+{
+  // The ESM consumer, compiled on its own. It must NOT share a program with the
+  // CJS fixture: loading both declaration variants at once makes the package's
+  // `declare global` (HTMLElementTagNameMap) collide with itself, because the
+  // `LosoPosPanel` it references resolves to two module identities. No real
+  // consumer is both ESM and CJS, so each is checked in isolation.
+  "compilerOptions": {
+    "strict": true,
+    "module": "node16",
+    "moduleResolution": "node16",
+    "target": "es2022",
+    "lib": ["ES2022", "DOM"],
+    "types": [],
+    "noEmit": true
+  },
+  "files": ["esm.mts"]
+}
