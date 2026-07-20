@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>@nscodecom/loso-pos-elements — demo</title>
+
+    <!-- No bundler: the browser resolves the two packages via this map. The SDK bundle is
+         self-contained; the elements bundle imports the SDK as the one bare specifier below. -->
+    <script type="importmap">
+      {
+        "imports": {
+          "@nscodecom/loso-pos-sdk": "../node_modules/@nscodecom/loso-pos-sdk/dist/index.js",
+          "@nscodecom/loso-pos-elements": "../dist/index.js"
+        }
+      }
+    </script>
+
+    <style>
+      :root { color-scheme: light dark; }
+      body {
+        font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+        margin: 0;
+        padding: 24px;
+        max-width: 1100px;
+        margin-inline: auto;
+      }
+      h1 { font-size: 1.25rem; margin: 0 0 4px; }
+      p.lede { margin: 0 0 20px; opacity: 0.7; }
+      .layout { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start; }
+      @media (max-width: 800px) { .layout { grid-template-columns: 1fr; } }
+      .card {
+        border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+        border-radius: 12px;
+        padding: 16px;
+      }
+      .controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-bottom: 16px; }
+      .controls label { display: inline-flex; gap: 6px; align-items: center; }
+      button, input, select {
+        font: inherit;
+        padding: 6px 10px;
+        border-radius: 8px;
+        border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+        background: transparent;
+        color: inherit;
+      }
+      button { cursor: pointer; }
+      /* The panel styled through its public custom properties, to show theming works. */
+      loso-pos-panel {
+        --loso-accent: #2f6f4f;
+        --loso-radius: 10px;
+        display: block;
+      }
+      #log {
+        margin: 0;
+        font: 12px/1.5 ui-monospace, monospace;
+        max-height: 420px;
+        overflow: auto;
+        white-space: pre-wrap;
+      }
+      #log .evt { padding: 3px 0; border-bottom: 1px solid color-mix(in srgb, currentColor 10%, transparent); }
+      #log .name { font-weight: 600; }
+      .hint { font-size: 0.85rem; opacity: 0.65; margin-top: 8px; }
+    </style>
+  </head>
+  <body>
+    <h1>@nscodecom/loso-pos-elements</h1>
+    <p class="lede">
+      A live <code>&lt;loso-pos-panel&gt;</code>, wired to an in-memory fake proxy — no backend, no
+      key. Scan a customer, quote, redeem, commit, refund. Every event the panel emits is logged.
+    </p>
+
+    <div class="controls card">
+      <label>
+        Basket subtotal
+        <input id="subtotal" type="number" min="1" step="0.01" value="42.00" style="width: 8ch" />
+        BAM
+      </label>
+      <span>Scan:</span>
+      <button data-scan="cust-sarah">Sarah K. · 2000 pts</button>
+      <button data-scan="cust-marko">Marko P. · 80 pts (under min)</button>
+      <label title="Simulate the proxy being unreachable — the panel should sell at full price">
+        <input id="down" type="checkbox" /> Proxy down
+      </label>
+      <button id="reset">Reset demo</button>
+    </div>
+
+    <div class="layout">
+      <section>
+        <loso-pos-panel
+          id="panel"
+          pos-transaction-id="POS-DEMO-1"
+          subtotal="42.00"
+          currency="BAM"
+          payment-method="card"
+        ></loso-pos-panel>
+        <p class="hint">
+          The panel holds no API key — it talks to the fake proxy through an injected client
+          (<code>auth: 'proxy'</code>). Toggle “Proxy down” mid-sale to see the fail-open posture.
+        </p>
+      </section>
+
+      <section class="card">
+        <strong>Event log</strong>
+        <div id="log"></div>
+      </section>
+    </div>
+
+    <script type="module" src="./demo.js"></script>
+  </body>
+</html>

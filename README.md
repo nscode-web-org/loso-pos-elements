@@ -11,6 +11,20 @@ these are native custom elements, so they work in React, Vue, Angular, or a plai
 npm install @nscodecom/loso-pos-elements
 ```
 
+## Try it
+
+A live panel wired to an in-memory fake proxy — no backend, no key. Clone the repo and:
+
+```bash
+npm install
+npm run demo      # builds, then serves http://localhost:5173/demo/
+```
+
+Scan a customer, quote, redeem with the slider, commit, and refund (whole or partial). Every event
+the panel emits is logged beside it, and a "Proxy down" toggle shows the fail-open posture — the
+till sells at full price when loyalty is unreachable. The fake proxy lives in
+[`demo/fake-proxy.js`](demo/fake-proxy.js).
+
 ## Your API key does not go in the browser
 
 This is the one thing to get right, so the package is built to make the wrong thing impossible:
