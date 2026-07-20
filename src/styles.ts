@@ -85,7 +85,22 @@ export const panelStyles = /* css */ `
   .error { border-color: var(--loso-danger); }
   .error__code { font-family: ui-monospace, monospace; font-size: 0.8125rem; color: var(--loso-danger); }
 
-  .busy { opacity: 0.6; pointer-events: none; }
+  .busy { opacity: 0.6; }
+
+  /* Visually hidden but available to assistive tech — for the live regions that
+     announce quote/commit/refund/error to a screen reader. */
+  .loso-sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
+  }
 
   @media (prefers-reduced-motion: no-preference) {
     button { transition: border-color 120ms ease; }

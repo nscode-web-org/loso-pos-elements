@@ -52,6 +52,14 @@ export class LosoPosPanel extends HTMLElement {
   #error: PosError | null = null;
   #busy = false;
 
+  // Accessibility bookkeeping. The shadow root holds a persistent skeleton — two
+  // live regions and one mount point — built once; only the mount's contents are
+  // replaced on render, so the live regions survive to announce and focus can be
+  // placed deliberately rather than lost each time.
+  #skeletonBuilt = false;
+  /** A selector for the control to focus after the next render, or null to leave focus alone. */
+  #focusTarget: string | null = null;
+
   constructor() {
     super();
     this.#root = this.attachShadow({ mode: 'open' });
@@ -106,6 +114,8 @@ export class LosoPosPanel extends HTMLElement {
       const result = await client.resolveCustomer(trimmed);
       if (result.ok) {
         this.#customer = result.data;
+        this.#announce(`Customer ${result.data.name} resolved.`);
+        this.#focusTarget = '[data-act="quote"]';
         this.#emit('loso-customer-resolved', { customer: result.data });
       }
       return result;
@@ -127,6 +137,17 @@ export class LosoPosPanel extends HTMLElement {
         // Default to taking nothing. The quote is a ceiling, not an instruction, and
         // pre-spending someone's points because a widget defaulted high is not ours to do.
         this.#setDiscount(0, false);
+
+        const redeemable = result.data.redeemable;
+        if (redeemable && redeemable.maxDiscount > 0) {
+          const currency = cart.currency;
+          this.#announce(`Quote ready. Up to ${money(redeemable.maxDiscount)} ${currency} available to redeem.`);
+          // Land on the slider, the one thing the cashier acts on next.
+          this.#focusTarget = '[data-el="discount"]';
+        } else {
+          this.#announce('Quote ready. Nothing redeemable on this basket; the sale still earns.');
+          this.#focusTarget = '[data-act="commit"]';
+        }
         this.#emit('loso-quoted', { quote: result.data });
       }
       return result;
@@ -172,6 +193,10 @@ export class LosoPosPanel extends HTMLElement {
       });
       if (result.ok) {
         this.#commit = result.data;
+        this.#announce(
+          `Sale committed. Reference ${result.data.loyaltyReference}. Paid ${money(result.data.finalAmount)} ${cart.currency}.`
+        );
+        this.#focusTarget = '[data-act="new-sale"]';
         this.#emit('loso-committed', { commit: result.data });
       }
       return result;
@@ -189,6 +214,10 @@ export class LosoPosPanel extends HTMLElement {
       });
       if (result.ok) {
         this.#refund = result.data;
+        this.#announce(
+          `Refund processed. ${money(result.data.refundedAmount)} ${this.cart?.currency ?? ''} refunded.`
+        );
+        this.#focusTarget = '[data-act="new-sale"]';
         this.#emit('loso-refunded', { refund: result.data });
       }
       return result;
@@ -203,12 +232,19 @@ export class LosoPosPanel extends HTMLElement {
     this.#commit = null;
     this.#refund = null;
     this.#error = null;
+    // Back to the top of the flow — put the cashier on the scan field.
+    this.#focusTarget = '[data-el="code"]';
     this.#render();
   }
 
   // ── Lifecycle ───────────────────────────────────────────────────────────────
 
   connectedCallback(): void {
+    // Give the host a name and a landmark so it is findable when navigating by
+    // region, not just an anonymous cluster of buttons. Author-overridable — set
+    // your own role/aria-label and these back off.
+    if (!this.hasAttribute('role')) this.setAttribute('role', 'group');
+    if (!this.hasAttribute('aria-label')) this.setAttribute('aria-label', 'Loyalty');
     this.#render();
   }
 
@@ -277,6 +313,8 @@ export class LosoPosPanel extends HTMLElement {
 
   #fail(error: PosError): void {
     this.#error = error;
+    // Assertive: a failed sale interrupts whatever the cashier was about to do.
+    this.#announce(error.message, true);
     this.#emit('loso-error', { error });
     this.#render();
   }
@@ -305,8 +343,68 @@ export class LosoPosPanel extends HTMLElement {
 
   #render(): void {
     if (!this.isConnected) return;
-    this.#root.innerHTML = `<style>${panelStyles}</style>${this.#template()}`;
+    this.#buildSkeleton();
+
+    const mount = this.#root.querySelector<HTMLElement>('[data-el="mount"]');
+    if (!mount) return;
+
+    mount.innerHTML = this.#template();
+    this.setAttribute('aria-busy', this.#busy ? 'true' : 'false');
     this.#bind();
+
+    // While a request is in flight, disable every control so a keyboard user
+    // cannot fire a second one — dimming with pointer-events alone would still
+    // let Tab+Enter through.
+    if (this.#busy) {
+      mount
+        .querySelectorAll<HTMLButtonElement | HTMLInputElement>('button, input')
+        .forEach((el) => {
+          el.disabled = true;
+        });
+    }
+
+    this.#applyFocus(mount);
+  }
+
+  /**
+   * The parts of the shadow tree that must outlive a re-render: the two live
+   * regions (a wholesale innerHTML swap re-parses `role="alert"` and it stops
+   * announcing reliably), plus the mount point whose contents do get replaced.
+   */
+  #buildSkeleton(): void {
+    if (this.#skeletonBuilt) return;
+    this.#root.innerHTML =
+      `<style>${panelStyles}</style>` +
+      `<div class="loso-sr-only" data-el="status" role="status" aria-live="polite"></div>` +
+      `<div class="loso-sr-only" data-el="alert" role="alert" aria-live="assertive"></div>` +
+      `<div data-el="mount"></div>`;
+    this.#skeletonBuilt = true;
+  }
+
+  /**
+   * Place focus on the control an action leads to next, since the control that
+   * triggered it was just replaced. Only when focus is "loose" — on the body
+   * because our element vanished, or on the host — so a cashier who moved to
+   * another part of the till during an async call is left where they are.
+   */
+  #applyFocus(mount: HTMLElement): void {
+    const target = this.#focusTarget;
+    this.#focusTarget = null;
+    if (!target || this.#busy) return;
+
+    const active = this.ownerDocument.activeElement;
+    const loose = active === null || active === this.ownerDocument.body || active === this;
+    if (!loose) return;
+
+    mount.querySelector<HTMLElement>(target)?.focus();
+  }
+
+  /** Announce a transition to assistive tech. Polite by default; assertive for errors. */
+  #announce(message: string, assertive = false): void {
+    const region = this.#root.querySelector<HTMLElement>(
+      assertive ? '[data-el="alert"]' : '[data-el="status"]'
+    );
+    if (region) region.textContent = message;
   }
 
   #template(): string {
@@ -325,7 +423,7 @@ export class LosoPosPanel extends HTMLElement {
     if (this.#refund) parts.push(this.#refundTemplate(currency));
     if (this.#error) parts.push(this.#errorTemplate());
 
-    return `<div class="stack${this.#busy ? ' busy' : ''}" aria-busy="${this.#busy}">${parts.join('')}</div>`;
+    return `<div class="stack${this.#busy ? ' busy' : ''}">${parts.join('')}</div>`;
   }
 
   #customerTemplate(): string {
@@ -373,12 +471,15 @@ export class LosoPosPanel extends HTMLElement {
       <div class="card">
         <div class="offer__amount">${money(redeemable.maxDiscount)} ${esc(currency)}</div>
         <p class="muted">A ceiling, not an instruction — take any amount up to it.</p>
-        <label class="muted" for="loso-discount">
-          Discount <strong>${money(this.#discount)} ${esc(currency)}</strong> (${percent}%)
-        </label>
+        <label class="muted" for="loso-discount">Loyalty discount</label>
+        <!-- Visual readout only: aria-hidden so the value is not read twice, once
+             here and once from the slider's aria-valuetext. -->
+        <div class="offer__readout" data-el="discount-readout" aria-hidden="true">
+          <strong>${money(this.#discount)} ${esc(currency)}</strong> (${percent}%)
+        </div>
         <input type="range" id="loso-discount" data-el="discount"
                min="0" max="${redeemable.maxDiscount}" step="${step}" value="${this.#discount}"
-               aria-label="Loyalty discount" />
+               aria-valuetext="${money(this.#discount)} ${esc(currency)}, ${percent} percent" />
       </div>`;
   }
 
@@ -422,8 +523,11 @@ export class LosoPosPanel extends HTMLElement {
 
   #errorTemplate(): string {
     const e = this.#error as PosError;
+    // No role="alert" here — the persistent assertive live region announces the
+    // failure, so a role on this rebuilt card would double it. This is the
+    // visible half; the spoken half lives in #fail.
     return `
-      <div class="card error" role="alert">
+      <div class="card error">
         <span class="error__code">${esc(e.code)}</span>
         <p class="muted">${esc(e.message)}</p>
         ${e.retryable ? '<p class="muted">Retryable — re-quote and try again.</p>' : ''}
@@ -451,6 +555,7 @@ export class LosoPosPanel extends HTMLElement {
       this.#customer = null;
       this.#quote = null;
       this.#discount = 0;
+      this.#focusTarget = '[data-el="code"]';
       this.#render();
     });
     on('quote', () => void this.quote());
@@ -458,12 +563,17 @@ export class LosoPosPanel extends HTMLElement {
     on('refund-all', () => void this.refund());
     on('new-sale', () => this.reset());
 
-    root.querySelector<HTMLInputElement>('[data-el="discount"]')?.addEventListener('input', (event) => {
+    const slider = root.querySelector<HTMLInputElement>('[data-el="discount"]');
+    slider?.addEventListener('input', (event) => {
       this.#setDiscount(Number((event.target as HTMLInputElement).value));
-      // Re-render would tear the range thumb out from under the pointer mid-drag; update the
-      // readout in place instead.
-      const label = root.querySelector('label[for="loso-discount"] strong');
-      if (label) label.textContent = `${money(this.#discount)} ${this.cart?.currency ?? ''}`;
+      // Re-render would tear the range thumb out from under the pointer mid-drag, so
+      // update the readout and the slider's spoken value in place instead.
+      const currency = this.cart?.currency ?? '';
+      const subtotal = this.cart?.subtotal ?? 0;
+      const percent = subtotal > 0 ? Math.floor((this.#discount / subtotal) * 10000) / 100 : 0;
+      const readout = root.querySelector('[data-el="discount-readout"]');
+      if (readout) readout.innerHTML = `<strong>${money(this.#discount)} ${esc(currency)}</strong> (${percent}%)`;
+      slider.setAttribute('aria-valuetext', `${money(this.#discount)} ${currency}, ${percent} percent`);
     });
   }
 }

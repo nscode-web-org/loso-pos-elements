@@ -1,6 +1,6 @@
 import { LosoPosClient } from '@nscodecom/loso-pos-sdk';
 import type { FetchLike } from '@nscodecom/loso-pos-sdk';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { defineLosoPosElements } from './registry.js';
 import type { LosoPosPanel } from './panel.js';
@@ -217,5 +217,118 @@ describe('<loso-pos-panel> — failure', () => {
 
     expect(el.shadowRoot?.querySelector('img')).toBeNull();
     expect(el.shadowRoot?.textContent).toContain('<img src=x');
+  });
+});
+
+/** A fetch whose one response is withheld until you call `release()`. */
+function deferredFetch(response: unknown): { fetch: FetchLike; release: () => void } {
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  const fetch: FetchLike = async () => {
+    await gate;
+    return { status: 200, ok: true, text: () => Promise.resolve(JSON.stringify(response)) };
+  };
+  return { fetch, release };
+}
+
+describe('<loso-pos-panel> — accessibility', () => {
+  it('names itself as a landmark, without clobbering an author-set label', () => {
+    const el = mountPanel();
+    expect(el.getAttribute('role')).toBe('group');
+    expect(el.getAttribute('aria-label')).toBe('Loyalty');
+
+    const custom = document.createElement('loso-pos-panel') as LosoPosPanel;
+    custom.setAttribute('aria-label', 'Rewards');
+    document.body.append(custom);
+    expect(custom.getAttribute('aria-label')).toBe('Rewards'); // left alone
+  });
+
+  it('keeps persistent live regions that survive a re-render', () => {
+    const el = mountPanel();
+    const status = el.shadowRoot?.querySelector('[data-el="status"]');
+    const alert = el.shadowRoot?.querySelector('[data-el="alert"]');
+    expect(status?.getAttribute('aria-live')).toBe('polite');
+    expect(alert?.getAttribute('role')).toBe('alert');
+
+    // Force a re-render; the very same region nodes must still be there, or an
+    // announcement set on them would never reach a screen reader.
+    el.setAttribute('subtotal', '99.00');
+    expect(el.shadowRoot?.querySelector('[data-el="status"]')).toBe(status);
+  });
+
+  it('announces a ready quote politely and a failure assertively', async () => {
+    const { fetch } = mockFetch([ok(quoteData)]);
+    const el = mountPanel(fetch);
+    await el.quote();
+    expect(el.shadowRoot?.querySelector('[data-el="status"]')?.textContent).toMatch(/Quote ready.*20\.00 BAM/);
+
+    const { fetch: failing } = mockFetch([
+      { ok: false, error: { code: 'redeem.insufficient_points', message: 'Not enough points.', retryable: true } },
+    ]);
+    el.client = new LosoPosClient({ baseUrl: 'https://till.vendor.example', auth: 'proxy', fetch: failing });
+    await el.quote();
+    expect(el.shadowRoot?.querySelector('[data-el="alert"]')?.textContent).toBe('Not enough points.');
+  });
+
+  it('gives the slider a spoken value that tracks the drag', async () => {
+    const { fetch } = mockFetch([ok(quoteData)]);
+    const el = mountPanel(fetch);
+    await el.quote();
+
+    const slider = el.shadowRoot?.querySelector<HTMLInputElement>('[data-el="discount"]');
+    // Named by the visible <label>, valued by aria-valuetext — so a reader says
+    // "Loyalty discount, 0.00 BAM" not a bare "0".
+    expect(el.shadowRoot?.querySelector('label[for="loso-discount"]')?.textContent?.trim()).toBe('Loyalty discount');
+    expect(slider?.getAttribute('aria-valuetext')).toBe('0.00 BAM, 0 percent');
+
+    slider!.value = '12.5';
+    slider!.dispatchEvent(new Event('input'));
+    // 12.50 / 42.00 = 29.76%, floored (never rounded up, same rule as the wire contract).
+    expect(slider?.getAttribute('aria-valuetext')).toBe('12.50 BAM, 29.76 percent');
+  });
+
+  it('disables controls and marks itself busy while a request is in flight', async () => {
+    const { fetch, release } = deferredFetch(ok(quoteData));
+    const el = mountPanel();
+    el.client = new LosoPosClient({ baseUrl: 'https://till.vendor.example', auth: 'proxy', fetch });
+
+    const pending = el.quote();
+    // Mid-flight: aria-busy set, and the quote button cannot be fired again.
+    expect(el.getAttribute('aria-busy')).toBe('true');
+    const quoteButton = el.shadowRoot?.querySelector<HTMLButtonElement>('[data-act="quote"]');
+    expect(quoteButton?.disabled).toBe(true);
+
+    release();
+    await pending;
+    expect(el.getAttribute('aria-busy')).toBe('false');
+  });
+
+  it('moves focus to the next step so a keyboard user is not dropped', async () => {
+    const { fetch } = mockFetch([ok({ customerRef: 'c1', name: 'Sarah K.', tier: 'Gold', active: true })]);
+    const el = mountPanel(fetch);
+
+    // Put focus where a cashier's is when they trigger resolve — in the scan field. This
+    // is also the loose state the panel needs to claim focus, and it sidesteps the
+    // activeElement that happy-dom leaks between tests in its shared document.
+    el.shadowRoot?.querySelector<HTMLInputElement>('[data-el="code"]')?.focus();
+
+    // Assert on what the panel focused, via a spy: happy-dom's ShadowRoot.activeElement
+    // getter is unreliable, but the behavior under test is "the panel calls focus() on
+    // the next control", which is exactly what this captures.
+    let focused: HTMLElement | null = null;
+    const spy = vi
+      .spyOn(HTMLElement.prototype, 'focus')
+      .mockImplementation(function (this: HTMLElement) {
+        focused = this;
+      });
+    try {
+      await el.resolve('+38765423554');
+    } finally {
+      spy.mockRestore();
+    }
+
+    // The scan input that had focus is gone; focus should land on the quote button.
+    expect(focused).not.toBeNull();
+    expect((focused as unknown as HTMLElement).getAttribute('data-act')).toBe('quote');
   });
 });
