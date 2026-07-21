@@ -1,6 +1,6 @@
 {
   "name": "@nscodecom/loso-pos-elements",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Drop-in web components for the Loso POS loyalty API. Framework-agnostic custom elements built on @nscodecom/loso-pos-sdk.",
   "keywords": [
     "loso",
